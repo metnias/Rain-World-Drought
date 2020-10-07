@@ -30,38 +30,7 @@ class patch_FoodMeter : FoodMeter
     {
         if (this.hud.owner is Player)
         {
-            if (!hibernation1 && ((this.hud.owner as Player) as patch_Player).uses <= 20)
-            {
-                if ((this.hud.owner as Player).playerState.foodInStomach >= 1 && (this.hud.owner as Player).abstractCreature.world.game.GetStorySession.saveState.totFood >= 1)
-                {
-                    if ((this.hud.owner as Player).abstractCreature.world.game.IsStorySession)
-                    {
-                        (this.hud.owner as Player).AddFood(-1);
-                        ((this.hud.owner as Player) as patch_Player).uses += 10;
-                    }
-                }
-                else
-                {
-                    AddHibernateCost();
-                    hibernation1 = true;
-                }
-            }
-            else if (!hibernation2 && ((this.hud.owner as Player) as patch_Player).uses <= 10)
-            {
-                if ((this.hud.owner as Player).playerState.foodInStomach >= 1 && (this.hud.owner as Player).abstractCreature.world.game.GetStorySession.saveState.totFood >= 1)
-                {
-                    if ((this.hud.owner as Player).abstractCreature.world.game.IsStorySession)
-                    {
-                        (this.hud.owner as Player).AddFood(-1);
-                        ((this.hud.owner as Player) as patch_Player).uses += 10;
-                    }
-                }
-                else
-                {
-                    AddHibernateCost();
-                    hibernation2 = true;
-                }
-            }
+            // Used to replenish jump energy and consume food
         }
         orig_GameUpdate();
     }

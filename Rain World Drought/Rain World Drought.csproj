@@ -132,6 +132,7 @@
     <Compile Include="PlacedObjects\TreeFruit.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Resources\FAtlas.cs" />
+    <Compile Include="Slugcat\JumpPulse.cs" />
     <Compile Include="Slugcat\MessageScreen.cs" />
     <Compile Include="Slugcat\patch_DreamScreen.cs" />
     <Compile Include="Slugcat\patch_DreamsState.cs" />
@@ -157,6 +158,7 @@
     <Compile Include="World\LMOracleBehaviorHasMark.cs" />
     <Compile Include="World\LMOracleSwamer.cs" />
     <Compile Include="World\MoonPearl.cs" />
+    <Compile Include="World\patch_MainLoopProcess.cs" />
     <Compile Include="World\patch_ScavengerOutpost.cs" />
     <Compile Include="World\patch_AboveCloudsView.cs" />
     <Compile Include="World\patch_BulletDrip.cs" />

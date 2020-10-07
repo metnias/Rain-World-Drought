@@ -3,51 +3,64 @@ using RWCustom;
 using MonoMod;
 using UnityEngine;
 using Noise;
+using System.Collections.Generic;
+using Random = UnityEngine.Random;
 
 
 [MonoModPatch("global::Player")]
 class patch_Player : Player
 {
-    public bool bashing;
-    public bool jmpDwn;
-    public float energy; //varies from 0f to 1f
-    public float maxEnergy = 1f;
-    private static float BASH_COST = 0.4f;
-    private static float RECHARGE_RATE = 0.002f;
-    private static float PARRY_COST = 0.5f;
-    private static int MAX_USES = 30;
+    private const int maxEnergy = 10;
+    private const int focusDuration = 60;
+    private const int slowdownDuration = 40;
+    private const float parryRadius = 150f;
+    private const int maxExtraJumps = 2;
+    private const float jumpForce = 7.5f;
+    private int jumpsSinceGrounded = 0;
+    private int energy; // Ability uses left before food is used, replenishes when focus is used at 0 with a non-empty food bar
+    private int focusLeft;
+    private int slowdownLeft;
+    private bool panicSlowdown;
+    private float ticksUntilPanicHit;
+    private bool canTripleJump;
+    private int noFocusJumpCounter;
+    public bool jumpQueued;
+
+    public float Focus => focusLeft / (float)focusDuration;
+    public float Slowdown => slowdownLeft / (float)slowdownDuration;
+    public float PanicSlowdown => (slowdownLeft == 0 || !panicSlowdown) ? 0f : Custom.LerpMap(ticksUntilPanicHit, 20f, 5f, 0f, Mathf.Clamp01((1f - Slowdown) * 40f));
+    public float Energy {
+        get => energy / (float)maxEnergy;
+        set => energy = (int)Mathf.InverseLerp(0, maxEnergy, value);
+    }
+
     //Ending code
     public bool voidEnergy = false; //true if the void effects are controlling the maxEnergy
+    public float voidEnergyAmount = 0f;
     public bool past22000 = false; //true if the player is in the void past -22000 y
     public bool past25000 = false; //true if the player is in the void past -25000 y
     //-------------------
     bool hibernation1 = false;
     bool hibernation2 = false;
-    public int uses = MAX_USES;
-    private float parry;//varies from 45f to 0f
     public WalkerBeast.PlayerInAntlers playerInAnt;
     public Player.AnimationIndex lastAnimation;
 
     [MonoModIgnore]
     patch_Player(AbstractCreature abstractCreature, World world) : base(abstractCreature, world) { }
-    
+
     public extern void orig_ctor(AbstractCreature abstractCreature, World world);
 
     [MonoModConstructor]
     public void ctor(AbstractCreature abstractCreature, World world)
     {
         orig_ctor(abstractCreature, world);
-        bashing = false;
-        jmpDwn = false;
-        parry = 0;
         this.lastAnimation = Player.AnimationIndex.None;
-        energy = 1f;
-        maxEnergy = 1f;
-        uses = MAX_USES;
         hibernation1 = false;
         hibernation2 = false;
         this.pearlConversation = new PearlConversation(this);
         voidEnergy = false;
+
+        energy = maxEnergy;
     }
 
     public void SwallowObject(int grasp)
@@ -72,10 +85,18 @@ class patch_Player : Player
 
     public extern void orig_MovementUpdate(bool eu);
 
-        public void MovementUpdate(bool eu)
+    public bool IsGrounded(bool feetMustBeGrounded)
     {
+        if (canJump > 0 && canWallJump == 0) return true;
+        if (animation == AnimationIndex.SurfaceSwim) return true;
+        if (bodyMode == BodyModeIndex.ClimbingOnBeam) return true;
+        if (feetMustBeGrounded) return false;
+        if (canWallJump > 0) return true;
+        return false;
+    }
 
-
+    public void MovementUpdate(bool eu)
+    {
         //if (Input.GetKeyDown(KeyCode.C))
         //{
         //    patch_AbstractCreature abstractCreature = new patch_AbstractCreature(this.room.world, (patch_CreatureTemplate)StaticWorld.GetCreatureTemplate((CreatureTemplate.Type)patch_CreatureTemplate.Type.SeaDrake), null, base.abstractCreature.pos, this.room.game.GetNewID());
@@ -100,7 +121,30 @@ class patch_Player : Player
         //    //abstractCreature.ChangeRooms(base.abstractCreature.pos);
         //    //return;
         //}
+
+        bool focusJumped = false;
+        if (noFocusJumpCounter > 0)
+            noFocusJumpCounter--;
+        else if ((slowdownLeft > 0 || canTripleJump) && !IsGrounded(false))
+        {
+            if ((input[0].jmp || jumpQueued) && !input[1].jmp)
+            {
+                FocusJump();
+                focusJumped = true;
+                jumpQueued = false;
+            }
+        }
+
+        if ((animation == AnimationIndex.BeamTip) || (animation == AnimationIndex.StandOnBeam))
+            noFocusJumpCounter = 2;
+        
         orig_MovementUpdate(eu);
+
+        if (focusJumped)
+        {
+            wantToJump = 0;
+        }
+
         if (animation == AnimationIndex.DeepSwim && lastAnimation != AnimationIndex.DeepSwim)
         {
             this.room.InGameNoise(new InGameNoise(base.bodyChunks[1].pos, 350f, this, 2f));
@@ -110,232 +154,286 @@ class patch_Player : Player
             this.room.InGameNoise(new InGameNoise(base.bodyChunks[1].pos, 350f, this, 2f));
         }
         lastAnimation = this.animation;
-        bool parryed = false;
-        if (uses > 0 && energy > PARRY_COST && parry <= 10 && !jmpDwn && input[0].jmp && !bashing && room.game != null && room.world != null && room.abstractRoom != null && !Malnourished)
+
+        DoAbilities();
+    }
+
+    // Activate focus state by tapping map
+    // While in focus state, leaving the ground (or starting off of the ground) slows down time
+    // Tapping jump while slowed activates doublejump
+    // If a deadly projectile get close to you, time slows as well
+    // Tapping jump during this slow parries and doublejumps
+    // If the deadly projectile is your own, it increases its speed and damage
+    private int mapHeld;
+    private void DoAbilities()
+    {
+        if (input[0].mp) mapHeld++;
+        else
         {
-            for (int num16 = 0; num16 < room.physicalObjects.Length; num16++)
+            if (input[1].mp && mapHeld < 10 && IsGrounded(true))
+                EnterFocus();
+            mapHeld = 0;
+        }
+
+        if (focusLeft > 0)
+        {
+            bool fromWeapon = false;
+            bool enterSlowdown = false;
+            // Enter slowdown when the player leaves the ground
+            if (bodyChunks[0].ContactPoint.y != -1 && bodyChunks[1].ContactPoint.y != -1 && !IsGrounded(false))
             {
-                for (int num17 = 0; num17 < room.physicalObjects[num16].Count; num17++)
+                Debug.Log("Entered slowdown from jump");
+                enterSlowdown = true;
+            }
+
+            // Enter slowdown if a deadly weapon is projected to hit the player
+            if (!enterSlowdown)
+            {
+                if(PanicWeapon(out float ticksUntilContact) != null) {
+                    Debug.Log("Entered slowdown from threat (" + ticksUntilContact + " ticks until contact)");
+                    enterSlowdown = true;
+                    fromWeapon = true;
+                }
+            }
+
+            // Should enter slowdown if non-weapon deadly projectiles (king tusks) are near
+            if (enterSlowdown)
+                EnterSlowdown(fromWeapon);
+        }
+
+        if(slowdownLeft > 0 && !panicSlowdown)
+        {
+            if (PanicWeapon(out float ticksUntilContact) != null)
+            {
+                Debug.Log("Switch to panic slowdown from threat (" + ticksUntilContact + " ticks until contact)");
+                panicSlowdown = true;
+                slowdownLeft = Math.Min(slowdownLeft, slowdownDuration - 10);
+            }
+        } else if(panicSlowdown)
+        {
+            if (PanicWeapon(out float ticksUntilContact) != null)
+                ticksUntilPanicHit = ticksUntilContact;
+            else
+            {
+                panicSlowdown = false;
+                ticksUntilPanicHit = 0;
+            }
+        }
+    }
+
+    private Weapon PanicWeapon(out float ticksUntilContact)
+    {
+        Weapon closestWeapon = FindClosestWeapon(out ticksUntilContact);
+
+        if (closestWeapon != null)
+        {
+            bool canSeeWeapon = false;
+            for (int i = 0; i < bodyChunks.Length; i++)
+                if (room.VisualContact(closestWeapon.firstChunk.pos, bodyChunks[i].pos))
                 {
-                    for (int num18 = 0; num18 < room.physicalObjects[num16][num17].bodyChunks.Length; num18++)
+                    canSeeWeapon = true;
+                    break;
+                }
+            if (ticksUntilContact < 10 || (ticksUntilContact < 20 && canSeeWeapon))
+                return closestWeapon;
+        }
+
+        return null;
+    }
+
+    private Weapon FindClosestWeapon(out float ticksUntilContact)
+    {
+        float minTicksUntilContact = float.PositiveInfinity;
+        Weapon closestWeapon = null;
+        for (int layer = room.physicalObjects.Length - 1; layer >= 0; layer--)
+        {
+            List<PhysicalObject> objs = room.physicalObjects[layer];
+            for (int i = objs.Count - 1; i >= 0; i--)
+            {
+                if (objs[i] is Weapon wep && wep.mode == Weapon.Mode.Thrown)
+                {
+                    if (!IsWeaponDeadly(wep)) continue;
+
+                    if (wep.thrownBy == this) continue;
+                    for (int chunk = bodyChunks.Length - 1; chunk >= 0; chunk--)
                     {
-                        if (!parryed && (room.physicalObjects[num16][num17] is Spear) && Math.Abs(room.physicalObjects[num16][num17].bodyChunks[num18].pos.x - mainBodyChunk.pos.x) < 200f && Math.Abs(room.physicalObjects[num16][num17].bodyChunks[num18].pos.y - mainBodyChunk.pos.y) < 200f  && (room.physicalObjects[num16][num17] as Spear).mode == Weapon.Mode.Thrown)
+                        float ticks = (bodyChunks[chunk].pos.x - wep.firstChunk.pos.x) / wep.firstChunk.vel.x;
+                        if (ticks > 0f && ticks < minTicksUntilContact)
                         {
-                            
-                            parry = 45f;
-                            energy -= PARRY_COST;
-                            parryed = true;
-                            Click();
-                            uses--;
+                            if (Mathf.Abs(PredictWeaponHeight(wep.firstChunk.pos, wep.firstChunk.vel, bodyChunks[chunk].pos.x, wep.gravity) - bodyChunks[chunk].pos.y) < bodyChunks[chunk].rad * 4f)
+                            {
+                                minTicksUntilContact = ticks;
+                                closestWeapon = wep;
+                            }
                         }
                     }
                 }
             }
         }
-            ///
-            ///Alternative method
-            ///
 
-          /*  foreach (UpdatableAndDeletable updatableAndDeletable in this.room.updateList)
-            {
-                if (!parryed && (updatableAndDeletable is Spear) && Custom.DistLess(this.mainBodyChunk.pos, (updatableAndDeletable as PhysicalObject).bodyChunks[0].pos, 200f) && (updatableAndDeletable as Spear).mode == Weapon.Mode.Thrown)
-                {
-                    Debug.Log("Click");
-                    this.parry = 45f;
-                    this.energy -= PARRY_COST;
-                    parryed = true;
-                    Click();
-                }
-            }*/
-
-
-        if (uses > 0 && !parryed && energy > BASH_COST && (bodyMode == BodyModeIndex.Default || bodyMode == BodyModeIndex.Stand || bodyMode == BodyModeIndex.ZeroG) && canJump <= 0 && !jmpDwn && input[0].pckp && input[0].jmp && !bashing && room.game != null && room.world != null && room.abstractRoom != null)
-        {
-            
-                if (mushroomCounter < 40)
-                {
-                    mushroomCounter += 40;
-                }
-                bashing = true;
-                jmpDwn = true;
-        }
-
-
-        if (!bashing && !parryed && (bodyMode == BodyModeIndex.Default || bodyMode == BodyModeIndex.Stand || bodyMode == BodyModeIndex.ZeroG) && canJump <= 0 && !jmpDwn && input[0].pckp && input[0].jmp && !bashing && room.game != null && room.world != null && room.abstractRoom != null)
-        {
-            room.PlaySound(SoundID.MENU_Greyed_Out_Button_Clicked, mainBodyChunk, false, 1f, 1f);
-            dropCounter = 0;
-        }
-
-        if (uses > 0 && bashing && input[0].jmp && !jmpDwn)
-        {
-            room.PlaySound(SoundID.Moon_Wake_Up_Swarmer_Ping, mainBodyChunk, false, 1f, 1f);
-            this.room.InGameNoise(new InGameNoise(base.bodyChunks[1].pos, 350f, this, 4f));
-            if ((input[0].y == 0 || input[0].x == 0))
-            {
-                bodyChunks[0].vel.y = 7.5f * (float)input[0].y * (energy + 1);
-                bodyChunks[1].vel.y = 5.5f * (float)input[0].y * (energy + 1);
-                bodyChunks[0].vel.x = 7.5f * (float)input[0].x * (energy + 1);
-                bodyChunks[1].vel.x = 5.5f * (float)input[0].x * (energy + 1);
-            }
-            else
-            {
-                bodyChunks[0].vel.y = 7.5f * 0.8509035f * (float)input[0].y * (energy + 1);
-                bodyChunks[1].vel.y = 5.5f * 0.8509035f * (float)input[0].y * (energy + 1);
-                bodyChunks[0].vel.x = 7.5f * 0.8509035f * (float)input[0].x * (energy + 1);
-                bodyChunks[1].vel.x = 5.5f * 0.8509035f * (float)input[0].x * (energy + 1);
-            }
-            bashing = false;
-            energy -= BASH_COST;
-            uses--;
-            if (mushroomCounter <= 40)
-            {
-                mushroomCounter = 0;
-            }
-            bashing = false;
-            mushroomEffect = 0f;
-        }
-        if (bashing && mushroomCounter <= 0)
-        {
-            bashing = false;
-            mushroomEffect = 0f;
-        }
-        if (bashing)
-        {
-            dropCounter = 0;
-            bodyChunks[0].vel.y = 0.5f * bodyChunks[0].vel.y;
-            bodyChunks[1].vel.y = 0.5f * bodyChunks[1].vel.y;
-            bodyChunks[0].vel.x = 0.5f * bodyChunks[0].vel.x;
-            bodyChunks[1].vel.x = 0.5f * bodyChunks[1].vel.x;
-        }
-        jmpDwn = input[0].jmp;
-        if (!hibernation1 && uses <= 20)
-        {
-            if (this.playerState.foodInStomach >= 1 && this.abstractCreature.world.game.GetStorySession.saveState.totFood >= 1)
-            {
-                if (this.abstractCreature.world.game.IsStorySession)
-                {
-                    this.AddFood(-1);
-                    uses += 10;
-                }
-            }
-            else
-            {
-                (this.slugcatStats as patch_SlugcatStats).AddHibernationCost();
-                hibernation1 = true;
-            }
-        }else if (!hibernation2 && uses <= 10)
-        {
-
-            if (this.playerState.foodInStomach >= 1 && this.abstractCreature.world.game.GetStorySession.saveState.totFood >= 1)
-            {
-                if (this.abstractCreature.world.game.IsStorySession)
-                {
-                    this.AddFood(-1);
-                    uses += 10;
-                }
-            }
-            else
-            {
-                (this.slugcatStats as patch_SlugcatStats).AddHibernationCost();
-                hibernation2 = true;
-            }
-        }
+        ticksUntilContact = minTicksUntilContact;
+        return closestWeapon;
     }
 
-        public extern void orig_Update(bool eu);
-
-    public void setObjectDown(bool eu)
+    private static bool IsWeaponDeadly(Weapon wep)
     {
-        int num8 = -1;
-        for (int num9 = 0; num9 < 2; num9++)
-        {
-            if (base.grasps[num9] != null)
-            {
-                num8 = num9;
-                break;
-            }
-        }
-        if (num8 > -1)
-        {
-            this.ReleaseObject(num8, eu);
-        }
-        else if (this.spearOnBack != null && this.spearOnBack.spear != null && base.mainBodyChunk.ContactPoint.y < 0)
-        {
-            this.room.socialEventRecognizer.CreaturePutItemOnGround(this.spearOnBack.spear, this);
-            this.spearOnBack.DropSpear();
-        }
+        if (!wep.HeavyWeapon) return false;
+        if (wep is Rock) return false;
+        return true;
     }
 
+    private static float PredictWeaponHeight(Vector2 p, Vector2 v, float targetX, float gravity)
+    {
+        float dx = targetX - p.x;
+        return v.y / v.x * dx - gravity / 2f / Mathf.Abs(Mathf.Pow(v.x, 3f)) * dx * dx + p.y;
+    }
+
+    private void EnterFocus()
+    {
+        Debug.Log("Entered focus");
+        focusLeft = focusDuration;
+    }
+
+    private void EnterSlowdown(bool panic)
+    {
+        Debug.Log($"Entered slowdown (panic: {panic})");
+        panicSlowdown = panic;
+        ticksUntilPanicHit = int.MaxValue / 2;
+        focusLeft = 0;
+        slowdownLeft = slowdownDuration - (panic ? 10 : 0);
+    }
+
+    private void FocusJump()
+    {
+        wantToJump = 0;
+        canJump = 0;
+        room.PlaySound(SoundID.Vulture_Feather_Hit_Terrain, mainBodyChunk, false, 3.25f, 0.8f + 0.05f * jumpsSinceGrounded);
+        room.PlaySound(SoundID.Shelter_Little_Hatch_Open, mainBodyChunk, false, 3.25f, 1.2f + 0.05f * jumpsSinceGrounded);
+        room.InGameNoise(new InGameNoise(bodyChunks[1].pos, 350f, this, 1f));
+
+        canTripleJump = jumpsSinceGrounded < maxExtraJumps;
+        float strength = Custom.LerpMap(jumpsSinceGrounded, 0, maxExtraJumps, 2f, 1f);
+        jumpsSinceGrounded++;
+        Vector2 jumpDir = input[0].IntVec.ToVector2();
+        if(input[0].gamePad)
+        {
+            if (!room.game.rainWorld.setup.devToolsActive || (input[0].analogueDir.sqrMagnitude != 0f))
+            {
+                jumpDir = input[0].analogueDir;
+                if (Mathf.Abs(jumpDir.x) > 0.9f) jumpDir.Set(Mathf.Sign(jumpDir.x), 0f);
+                else if (Mathf.Abs(jumpDir.y) > 0.9f) jumpDir.Set(0f, Mathf.Sign(jumpDir.y));
+                jumpDir.Normalize();
+            }
+        }
+        jumpDir.y += 0.25f;
+
+        if (jumpDir.x == 0 && jumpDir.y == 0) jumpDir.y = 1;
+
+        // Correct jump power on diagonals
+        jumpDir.Normalize();
+
+        Vector2 force = new Vector2(jumpDir.x * strength, jumpDir.y * strength);
+        BoostChunk(bodyChunks[0], jumpForce * force);
+        BoostChunk(bodyChunks[1], jumpForce * force * (5.5f / 7.5f));
+
+        // Create a ring effect
+        room.AddObject(new JumpPulse(bodyChunks[0].pos * 0.5f + bodyChunks[1].pos * 0.5f - force.normalized * 10f, -force));
+
+        // Parry weapons
+        bool parried = false;
+        Vector2 parryCenter = Vector2.Lerp(bodyChunks[0].pos, bodyChunks[1].pos, 0.5f);
+        for(int i = room.updateList.Count - 1; i >= 0; i--)
+        {
+            if(room.updateList[i] is Weapon wep)
+            {
+                if(IsWeaponDeadly(wep) && (wep.mode == Weapon.Mode.Thrown))
+                {
+                    Vector2 delta = wep.firstChunk.pos - parryCenter;
+                    if (Vector2.SqrMagnitude(delta) < parryRadius * parryRadius)
+                    {
+                        parried = true;
+                        if (wep.thrownBy == this)
+                        {
+                            // Boost spears if thrown by yourself
+                            if(Mathf.Sign(wep.firstChunk.vel.x) == Mathf.Sign(wep.firstChunk.pos.x - parryCenter.x))
+                            {
+                                wep.firstChunk.vel *= 1.5f;
+                                if (wep is Spear spr)
+                                {
+                                    spr.spearDamageBonus += 0.5f;
+                                    for (int j = Random.Range(2, 5); j >= 0; j--)
+                                        room.AddObject(new MouseSpark(spr.firstChunk.pos, (Random.insideUnitCircle - spr.firstChunk.vel.normalized * 2f) * 5f, Random.value * 0.25f + 0.25f, Color.white));
+                                }
+                            }
+                        }
+                        else
+                        {
+
+                            for (int j = Random.Range(2, 5); j >= 0; j--)
+                                room.AddObject(new MouseSpark(wep.firstChunk.pos, (Random.insideUnitCircle + delta.normalized) * 5f, Random.value * 0.25f + 0.25f, Color.white));
+                            wep.firstChunk.vel *= -0.25f;
+                            wep.ChangeMode(Weapon.Mode.Free);
+                        }
+                    }
+                }
+            }
+        }
+        if (parried)
+            Click();
+
+        focusLeft = 0;
+        slowdownLeft = 0;
+    }
+
+    private void BoostChunk(BodyChunk chunk, Vector2 vel)
+    {
+        // Set velocity, keeping the component of motion facing the new direction
+        Vector2 dir = vel.normalized;
+        dir.Set(dir.y, -dir.x);
+        Vector2 oldVel = chunk.vel;
+        oldVel -= dir * Vector2.Dot(oldVel, dir);
+        if (Vector2.Dot(oldVel, vel) < 0f) oldVel.Set(0f, 0f);
+        chunk.vel = vel + oldVel * 0.5f;
+    }
+
+    public extern void orig_Update(bool eu);
+    
     public void Update(bool eu)
     {
-        if (bashing)
+        orig_Update(eu);
+
+        if (focusLeft > 0)
         {
-            dropCounter = 0;
-            mushroomEffect = Custom.LerpAndTick(mushroomEffect, 5f, 0.2f, 0.1f);
-        } else if (dropCounter == 15) {
-            setObjectDown(eu);
-            dropCounter = 16;
-            //Debug.Log("Drop and Count from " + (dropCounter - 1) + " to " + dropCounter);
-        } else if (dropCounter > 0 && dropCounter < 30)
+            focusLeft--;
+            if (focusLeft == 0) Debug.Log("Exited focus from timer");
+        }
+        if (slowdownLeft > 0)
         {
-            dropCounter++;
-            //Debug.Log("Count from "+(dropCounter-1)+" to " + dropCounter);
+            slowdownLeft--;
+            if (slowdownLeft == 0) Debug.Log("Exited slowdown from timer");
         }
 
-        if (!Malnourished)
+        if (IsGrounded(true))
         {
-            if (parry > 0f)
-            {
-                parry--;
-            }
-            energy = Mathf.Clamp(energy+ RECHARGE_RATE, 0, maxEnergy);
-            if (uses < 10 & !voidEnergy)
-            {
-                maxEnergy = Mathf.Clamp((uses+5 / 14f), BASH_COST, 1f);
-            }
+            jumpsSinceGrounded = 0;
+            canTripleJump = false;
         }
-        else
-        {
-            energy = 0f;
-        }
-        orig_Update(eu);
+
         if (this.Consious && !Malnourished && this.room != null && this.room.game != null && this.room.game.IsStorySession)
         {
             this.pearlConversation.Update(eu);
         }
+
+        jumpQueued = false;
     }
 
-        public override Color ShortCutColor()
-        {
-            if ((State as PlayerState).slugcatCharacter == 1)
-            {
-                return new Color(0.4f, 0.49411764705f, 0.8f);
-            }
-                return PlayerGraphics.SlugcatColor((State as PlayerState).slugcatCharacter);
-        }
-
-    public override bool SpearStick(Weapon source, float dmg, BodyChunk chunk, PhysicalObject.Appendage.Pos onAppendagePos, Vector2 direction)
+    public override Color ShortCutColor()
     {
-        if (parry > 0f)
+        if ((State as PlayerState).slugcatCharacter == 1)
         {
-            return false;
+            return new Color(0.4f, 0.49411764705f, 0.8f);
         }
-        return true;
-    }
-
-    public override void Violence(BodyChunk source, Vector2? directionAndMomentum, BodyChunk hitChunk, Appendage.Pos hitAppendage, DamageType type, float damage, float stunBonus)
-    {
-        if (type == DamageType.Stab && parry > 0f)
-        {
-            int num3 = (int)Math.Min(UnityEngine.Random.value + 10f, 25f);
-            for (int i = 0; i < num3; i++)
-            {
-                room.AddObject(new Spark(source.pos + Custom.DegToVec(UnityEngine.Random.value * 360f) * 5f * UnityEngine.Random.value, source.vel * -0.1f + Custom.DegToVec(UnityEngine.Random.value * 360f) * Mathf.Lerp(0.2f, 0.4f, UnityEngine.Random.value) * source.vel.magnitude, new Color(1f, 1f, 1f), graphicsModule as LizardGraphics, 10, 170));
-            }
-            return;
-        }
-        base.Violence(source, directionAndMomentum, hitChunk, hitAppendage, type, damage, stunBonus);
+        return PlayerGraphics.SlugcatColor((State as PlayerState).slugcatCharacter);
     }
 
     public void Click()
@@ -352,457 +450,9 @@ class patch_Player : Player
                 room.AddObject(new WaterDrip(bodyChunks[0].pos, Custom.DegToVec(UnityEngine.Random.value * 360f) * Mathf.Lerp(4f, 21f, UnityEngine.Random.value), false));
             }
         }
-        room.PlaySound(SoundID.Lizard_Head_Shield_Deflect, mainBodyChunk);
+        room.PlaySound(SoundID.Lizard_Head_Shield_Deflect, mainBodyChunk, false, 2f, 1f);
     }
-
-    public void GrabUpdate(bool eu)
-    {
-        if (this.spearOnBack != null)
-        {
-            this.spearOnBack.Update(eu);
-        }
-        bool flag = this.input[0].x == 0 && this.input[0].y == 0 && !this.input[0].jmp && !this.input[0].thrw && base.mainBodyChunk.submersion < 0.5f;
-        bool flag2 = false;
-        bool flag3 = false;
-        if (this.input[0].pckp && !this.input[1].pckp && this.switchHandsProcess == 0f)
-        {
-            bool flag4 = base.grasps[0] != null || base.grasps[1] != null;
-            if (base.grasps[0] != null && (this.Grabability(base.grasps[0].grabbed) == Player.ObjectGrabability.TwoHands || this.Grabability(base.grasps[0].grabbed) == Player.ObjectGrabability.Drag))
-            {
-                flag4 = false;
-            }
-            if (flag4)
-            {
-                if (this.switchHandsCounter == 0)
-                {
-                    this.switchHandsCounter = 15;
-                }
-                else
-                {
-                    this.room.PlaySound(SoundID.Slugcat_Switch_Hands_Init, base.mainBodyChunk);
-                    this.switchHandsProcess = 0.01f;
-                    this.wantToPickUp = 0;
-                    this.noPickUpOnRelease = 20;
-                }
-            }
-            else
-            {
-                this.switchHandsProcess = 0f;
-            }
-        }
-        if (this.switchHandsProcess > 0f)
-        {
-            float num = this.switchHandsProcess;
-            this.switchHandsProcess += 0.0833333358f;
-            if (num < 0.5f && this.switchHandsProcess >= 0.5f)
-            {
-                this.room.PlaySound(SoundID.Slugcat_Switch_Hands_Complete, base.mainBodyChunk);
-                base.SwitchGrasps(0, 1);
-            }
-            if (this.switchHandsProcess >= 1f)
-            {
-                this.switchHandsProcess = 0f;
-            }
-        }
-        int num2 = -1;
-        if (flag)
-        {
-            int num3 = -1;
-            int num4 = -1;
-            int num5 = 0;
-            while (num3 < 0 && num5 < 2)
-            {
-                if (base.grasps[num5] != null && base.grasps[num5].grabbed is IPlayerEdible && (base.grasps[num5].grabbed as IPlayerEdible).Edible)
-                {
-                    num3 = num5;
-                }
-                num5++;
-            }
-            if ((num3 == -1 || (this.FoodInStomach >= this.MaxFoodInStomach && !(base.grasps[num3].grabbed is KarmaFlower) && !(base.grasps[num3].grabbed is Mushroom))) && (this.objectInStomach == null || this.CanPutSpearToBack))
-            {
-                int num6 = 0;
-                while (num4 < 0 && num2 < 0 && num6 < 2)
-                {
-                    if (base.grasps[num6] != null)
-                    {
-                        if (this.CanPutSpearToBack && base.grasps[num6].grabbed is Spear)
-                        {
-                            num2 = num6;
-                        }
-                        else if (this.CanBeSwallowed(base.grasps[num6].grabbed))
-                        {
-                            num4 = num6;
-                        }
-                    }
-                    num6++;
-                }
-            }
-            if (num3 > -1 && this.noPickUpOnRelease < 1)
-            {
-                if (!this.input[0].pckp)
-                {
-                    int num7 = 1;
-                    while (num7 < 10 && this.input[num7].pckp)
-                    {
-                        num7++;
-                    }
-                    if (num7 > 1 && num7 < 10)
-                    {
-                        this.PickupPressed();
-                    }
-                }
-            }
-            else if (this.input[0].pckp && !this.input[1].pckp)
-            {
-                this.PickupPressed();
-            }
-            if (this.input[0].pckp)
-            {
-                if (num2 > -1 || this.CanRetrieveSpearFromBack)
-                {
-                    this.spearOnBack.increment = true;
-                }
-                else if (num4 > -1 || this.objectInStomach != null)
-                {
-                    flag3 = true;
-                }
-            }
-            if (num3 > -1 && this.wantToPickUp < 1 && (this.input[0].pckp || this.eatCounter <= 15) && base.Consious && Custom.DistLess(base.mainBodyChunk.pos, base.mainBodyChunk.lastPos, 3.6f))
-            {
-                if (base.graphicsModule != null)
-                {
-                    (base.graphicsModule as PlayerGraphics).LookAtObject(base.grasps[num3].grabbed);
-                }
-                flag2 = true;
-                if (this.FoodInStomach < this.MaxFoodInStomach || base.grasps[num3].grabbed is KarmaFlower || base.grasps[num3].grabbed is Mushroom)
-                {
-                    flag3 = false;
-                    if (this.spearOnBack != null)
-                    {
-                        this.spearOnBack.increment = false;
-                    }
-                    if (this.eatCounter < 1)
-                    {
-                        this.eatCounter = 15;
-                        this.BiteEdibleObject(eu);
-                    }
-                }
-                else if (this.eatCounter < 20 && this.room.game.cameras[0].hud != null)
-                {
-                    this.room.game.cameras[0].hud.foodMeter.RefuseFood();
-                }
-            }
-        }
-        else if (this.input[0].pckp && !this.input[1].pckp)
-        {
-            this.PickupPressed();
-        }
-        else
-        {
-            if (this.CanPutSpearToBack)
-            {
-                for (int i = 0; i < 2; i++)
-                {
-                    if (base.grasps[i] != null && base.grasps[i].grabbed is Spear)
-                    {
-                        num2 = i;
-                        break;
-                    }
-                }
-            }
-            if (this.input[0].pckp && (num2 > -1 || this.CanRetrieveSpearFromBack))
-            {
-                this.spearOnBack.increment = true;
-            }
-        }
-        if (this.input[0].pckp && base.grasps[0] != null && base.grasps[0].grabbed is Creature && this.CanEatMeat(base.grasps[0].grabbed as Creature) && (base.grasps[0].grabbed as Creature).Template.meatPoints > 0)
-        {
-            this.eatMeat++;
-            this.EatMeatUpdate();
-            if (this.spearOnBack != null)
-            {
-                this.spearOnBack.increment = false;
-                this.spearOnBack.interactionLocked = true;
-            }
-            if (this.eatMeat % 80 == 0 && ((base.grasps[0].grabbed as Creature).State.meatLeft <= 0 || this.FoodInStomach >= this.MaxFoodInStomach))
-            {
-                this.eatMeat = 0;
-                this.wantToPickUp = 0;
-                this.TossObject(0, eu);
-                this.ReleaseGrasp(0);
-                this.standing = true;
-            }
-            return;
-        }
-        if (!this.input[0].pckp && base.grasps[0] != null && this.eatMeat > 60)
-        {
-            this.eatMeat = 0;
-            this.wantToPickUp = 0;
-            this.TossObject(0, eu);
-            this.ReleaseGrasp(0);
-            this.standing = true;
-            return;
-        }
-        this.eatMeat = Custom.IntClamp(this.eatMeat - 1, 0, 50);
-        if (flag2 && this.eatCounter > 0)
-        {
-            this.eatCounter--;
-        }
-        else if (!flag2 && this.eatCounter < 40)
-        {
-            this.eatCounter++;
-        }
-        if (flag3)
-        {
-            this.swallowAndRegurgitateCounter++;
-            if (this.objectInStomach != null && this.swallowAndRegurgitateCounter > 110)
-            {
-                this.Regurgitate();
-                if (this.spearOnBack != null)
-                {
-                    this.spearOnBack.interactionLocked = true;
-                }
-                this.swallowAndRegurgitateCounter = 0;
-            }
-            else if (this.objectInStomach == null && this.swallowAndRegurgitateCounter > 90)
-            {
-                for (int j = 0; j < 2; j++)
-                {
-                    if (base.grasps[j] != null && this.CanBeSwallowed(base.grasps[j].grabbed))
-                    {
-                        base.bodyChunks[0].pos += Custom.DirVec(base.grasps[j].grabbed.firstChunk.pos, base.bodyChunks[0].pos) * 2f;
-                        this.SwallowObject(j);
-                        if (this.spearOnBack != null)
-                        {
-                            this.spearOnBack.interactionLocked = true;
-                        }
-                        this.swallowAndRegurgitateCounter = 0;
-                        (base.graphicsModule as PlayerGraphics).swallowing = 20;
-                        break;
-                    }
-                }
-            }
-        }
-        else
-        {
-            this.swallowAndRegurgitateCounter = 0;
-        }
-        for (int k = 0; k < base.grasps.Length; k++)
-        {
-            if (base.grasps[k] != null && base.grasps[k].grabbed.slatedForDeletetion)
-            {
-                this.ReleaseGrasp(k);
-            }
-        }
-        if (base.grasps[0] != null && this.Grabability(base.grasps[0].grabbed) == Player.ObjectGrabability.TwoHands)
-        {
-            this.pickUpCandidate = null;
-        }
-        else
-        {
-            PhysicalObject physicalObject = (this.dontGrabStuff >= 1) ? null : this.PickupCandidate(20f);
-            if (this.pickUpCandidate != physicalObject && physicalObject != null && physicalObject is PlayerCarryableItem)
-            {
-                (physicalObject as PlayerCarryableItem).Blink();
-            }
-            this.pickUpCandidate = physicalObject;
-        }
-        if (this.switchHandsCounter > 0)
-        {
-            this.switchHandsCounter--;
-        }
-        if (this.wantToPickUp > 0)
-        {
-            this.wantToPickUp--;
-        }
-        if (this.wantToThrow > 0)
-        {
-            this.wantToThrow--;
-        }
-        if (this.noPickUpOnRelease > 0)
-        {
-            this.noPickUpOnRelease--;
-        }
-        if (this.input[0].thrw && !this.input[1].thrw)
-        {
-            this.wantToThrow = 5;
-        }
-        if (this.wantToThrow > 0)
-        {
-            for (int l = 0; l < 2; l++)
-            {
-                if (base.grasps[l] != null && this.IsObjectThrowable(base.grasps[l].grabbed))
-                {
-                    this.ThrowObject(l, eu);
-                    this.wantToThrow = 0;
-                    break;
-                }
-            }
-        }
-        if (this.wantToPickUp > 0)
-        {
-            bool flag5 = true;
-            if (this.animation == Player.AnimationIndex.DeepSwim)
-            {
-                if (base.grasps[0] == null && base.grasps[1] == null)
-                {
-                    flag5 = false;
-                }
-                else
-                {
-                    for (int m = 0; m < 10; m++)
-                    {
-                        if (this.input[m].y > -1 || this.input[m].x != 0)
-                        {
-                            flag5 = false;
-                            break;
-                        }
-                    }
-                }
-            }
-            else
-            {
-                for (int n = 0; n < 5; n++)
-                {
-                    if (this.input[n].y > -1)
-                    {
-                        flag5 = false;
-                        break;
-                    }
-                }
-            }
-            if (base.grasps[0] != null && this.HeavyCarry(base.grasps[0].grabbed))
-            {
-                flag5 = true;
-            }
-            if (!flag5)
-            {
-                dropCounter = 0;
-            }
-            if (flag5)
-            {
-                for (int i = 0; i < 2; i++)
-                {
-                    if (base.grasps[i] != null)
-                    {
-                        this.wantToPickUp = 0;
-                        break;
-                    }
-                }
-                if ((bodyMode == BodyModeIndex.Default || bodyMode == BodyModeIndex.Stand || bodyMode == BodyModeIndex.ZeroG) && canJump <= 0)
-                {
-                    if (dropCounter <= 0)
-                    {
-                        //Debug.Log("Drop Started");
-                        dropCounter = 1;
-                    }
-                    else if (dropCounter < 16)
-                    {
-                        //Debug.Log("Drop pressed again: double drop!");
-                        setObjectDown(eu);
-                        setObjectDown(eu);
-                        dropCounter = 16;
-                    }
-                    else if (dropCounter < 30)
-                    {
-                        //Debug.Log("Drop pressed again after first drop: drop!");
-                        setObjectDown(eu);
-                        dropCounter = 16;
-                    }
-                    else
-                    {
-                        //Debug.Log("Drop Started");
-                        dropCounter = 1;
-                    }
-                }
-                else
-                {
-                    setObjectDown(eu);
-                    if (dropCounter > 0 && dropCounter < 16)
-                    {
-                        setObjectDown(eu);
-                    }
-                    dropCounter = 16;
-                }
-                if (!jmpDwn && input[0].pckp && input[0].jmp && !bashing && room.game != null && room.world != null && room.abstractRoom != null)
-                {
-                    dropCounter = 0;//For those speedrunners out there
-                }
-            }
-            else if (this.pickUpCandidate != null)
-            {
-                if (this.pickUpCandidate is Spear && this.CanPutSpearToBack && ((base.grasps[0] != null && this.Grabability(base.grasps[0].grabbed) >= Player.ObjectGrabability.BigOneHand) || (base.grasps[1] != null && this.Grabability(base.grasps[1].grabbed) >= Player.ObjectGrabability.BigOneHand) || (base.grasps[0] != null && base.grasps[1] != null)))
-                {
-                    //Debug.Log("spear straight to back");
-                    this.room.PlaySound(SoundID.Slugcat_Switch_Hands_Init, base.mainBodyChunk);
-                    this.spearOnBack.SpearToBack(this.pickUpCandidate as Spear);
-                }
-                else
-                {
-                    int num10 = 0;
-                    for (int num11 = 0; num11 < 2; num11++)
-                    {
-                        if (base.grasps[num11] == null)
-                        {
-                            num10++;
-                        }
-                    }
-                    if (this.Grabability(this.pickUpCandidate) == Player.ObjectGrabability.TwoHands && num10 < 4)
-                    {
-                        for (int num12 = 0; num12 < 2; num12++)
-                        {
-                            if (base.grasps[num12] != null)
-                            {
-                                this.ReleaseGrasp(num12);
-                            }
-                        }
-                    }
-                    else if (num10 == 0)
-                    {
-                        for (int num13 = 0; num13 < 2; num13++)
-                        {
-                            if (base.grasps[num13] != null && base.grasps[num13].grabbed is Fly)
-                            {
-                                this.ReleaseGrasp(num13);
-                                break;
-                            }
-                        }
-                    }
-                    for (int num14 = 0; num14 < 2; num14++)
-                    {
-                        if (base.grasps[num14] == null)
-                        {
-                            if (this.pickUpCandidate is Creature)
-                            {
-                                this.room.PlaySound(SoundID.Slugcat_Pick_Up_Creature, this.pickUpCandidate.firstChunk, false, 1f, 1f);
-                            }
-                            else if (this.pickUpCandidate is PlayerCarryableItem)
-                            {
-                                for (int num15 = 0; num15 < this.pickUpCandidate.grabbedBy.Count; num15++)
-                                {
-                                    this.pickUpCandidate.grabbedBy[num15].grabber.GrabbedObjectSnatched(this.pickUpCandidate.grabbedBy[num15].grabbed, this);
-                                    this.pickUpCandidate.grabbedBy[num15].grabber.ReleaseGrasp(this.pickUpCandidate.grabbedBy[num15].graspUsed);
-                                }
-                                (this.pickUpCandidate as PlayerCarryableItem).PickedUp(this);
-                            }
-                            else
-                            {
-                                this.room.PlaySound(SoundID.Slugcat_Pick_Up_Misc_Inanimate, this.pickUpCandidate.firstChunk, false, 1f, 1f);
-                            }
-                            this.SlugcatGrab(this.pickUpCandidate, num14);
-                            if (this.pickUpCandidate.graphicsModule != null && this.Grabability(this.pickUpCandidate) < (Player.ObjectGrabability)5)
-                            {
-                                this.pickUpCandidate.graphicsModule.BringSpritesToFront();
-                            }
-                            break;
-                        }
-                    }
-                }
-                this.wantToPickUp = 0;
-            }
-        }
-    }
-
+    
     public extern void orig_Grabbed(Creature.Grasp grasp);
 
     public override void Grabbed(Creature.Grasp grasp)

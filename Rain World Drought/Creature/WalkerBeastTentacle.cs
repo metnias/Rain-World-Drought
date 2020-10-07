@@ -10,11 +10,12 @@ public class WalkerBeastTentacle : Tentacle
     {
         setGrabDelay = 8;
         this.tentacleNumber = tentacleNumber;
-        tProps = new Tentacle.TentacleProps(false, false, true, 0.5f, 0f, 0.6f, 0.8f, 1.04f, 1.2f, 10f, 1f, 5f, 15, 60, 12, 0);
+        const float speedMul = 1.5f;
+        tProps = new Tentacle.TentacleProps(false, false, true, 0.5f, 0f, 0.6f * speedMul, 0.8f * speedMul, 1.04f * speedMul, 1.2f * speedMul, 10f * speedMul, 1f, 5f, 15, 60, 12, 0);
         tChunks = new Tentacle.TentacleChunk[4];
         for (int i = 0; i < tChunks.Length; i++)
         {
-            tChunks[i] = new Tentacle.TentacleChunk(this, i, (float)(i + 1) / (float)tChunks.Length, 4f);
+            tChunks[i] = new Tentacle.TentacleChunk(this, i, (float)(i + 1) / (float)tChunks.Length, 1f);
         }
         side = ((tentacleNumber % 2 != 0) ? 1 : 0);
         pair = ((tentacleNumber >= 2) ? 1 : 0);

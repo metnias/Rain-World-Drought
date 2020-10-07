@@ -36,6 +36,8 @@ public class patch_PlayerGraphics : PlayerGraphics
         cosmetics = new List<PlayerCosmetics>();
         int num = 14;
         extraSprites = 0;
+        
+        // Tail rings
         for (int l = 0; l < tail.Length; l++)
         {
             tailLength += tail[l].connectionRad;
@@ -43,6 +45,9 @@ public class patch_PlayerGraphics : PlayerGraphics
         num = AddCosmetics(num, new TailRing(this, num, 0));
         num = AddCosmetics(num, new TailRing(this, num, 1));
         num = AddCosmetics(num, new TailRing(this, num, 2));
+
+        // Focus sprites
+        num = AddCosmetics(num, new FocusSprites(this, num));
     }
 
     private float tailLength;
@@ -113,9 +118,6 @@ public class patch_PlayerGraphics : PlayerGraphics
         }
 
         AddToContainer(sLeaser, rCam, null);
-
-
-
     }
 
     //[MonoMod.MonoModLinkTo("System.Void GraphicsModule::DrawSprites(RoomCamera.SpriteLeaser sLeaser, RoomCamera rCam, float timeStacker, Vector2 camPos)")]
@@ -127,6 +129,22 @@ public class patch_PlayerGraphics : PlayerGraphics
 
     public override void DrawSprites(RoomCamera.SpriteLeaser sLeaser, RoomCamera rCam, float timeStacker, Vector2 camPos)
     {
+        // Hack to make doublejumps during slowtime more consistent
+        {
+            patch_Player ply = (patch_Player)player;
+            int plyNum = ply.playerState.playerNumber;
+            Options options = rCam.game.rainWorld.options;
+            bool gamePad = options.controls[plyNum].gamePad;
+
+            // Check if the jump key was pressed down this frame
+            if(!gamePad || (plyNum == 0 && rCam.game.rainWorld.setup.devToolsActive))
+                if (Input.GetKeyDown(options.controls[plyNum].KeyboardJump))
+                    ply.jumpQueued = true;
+            if(gamePad || (plyNum == 0 && rCam.game.rainWorld.setup.devToolsActive))
+                if (Input.GetKeyDown(options.controls[plyNum].GamePadJump))
+                    ply.jumpQueued = true;
+        }
+
         if ((this.player as patch_Player).voidEnergy)
         {
             this.ApplyPalette(sLeaser, rCam, rCam.currentPalette);
@@ -232,7 +250,7 @@ public class patch_PlayerGraphics : PlayerGraphics
         float voidInEffect = 0f;
         if ((this.player as patch_Player).voidEnergy)
         {
-            voidInEffect = (1f - (this.player as patch_Player).maxEnergy)/1.2f;
+            voidInEffect = (this.player as patch_Player).voidEnergyAmount / 1.2f;
         }
         Color color = Color.Lerp(PlayerGraphics.SlugcatColor(player.playerState.slugcatCharacter),Color.white, voidInEffect);
         Color color2 = palette.blackColor;

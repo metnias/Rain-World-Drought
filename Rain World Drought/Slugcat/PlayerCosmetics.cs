@@ -1,3 +1,4 @@
+using RWCustom;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -49,32 +50,29 @@ public class TailRing : PlayerCosmetics
 
     public override void ApplyPalette(RoomCamera.SpriteLeaser sLeaser, RoomCamera rCam, RoomPalette palette)
     {
+        patch_Player ply = (patch_Player)pGraphics.owner;
         float voidInEffect = 0f;
         if ((pGraphics.owner as patch_Player).voidEnergy)
         {
-            voidInEffect = (1f - (pGraphics.owner as patch_Player).maxEnergy) / 1.2f;
+            voidInEffect = ply.voidEnergyAmount / 1.2f;
         }
-        Color color = Color.Lerp(PlayerGraphics.SlugcatColor((pGraphics.owner as patch_Player).playerState.slugcatCharacter), Color.white, voidInEffect);
+        Color color = Color.Lerp(PlayerGraphics.SlugcatColor(ply.playerState.slugcatCharacter), Color.white, voidInEffect);
         int order = -tailSegment;
         float alpha = 1f;
-        if ((pGraphics.owner as patch_Player).energy < (pGraphics.owner as patch_Player).maxEnergy && !(pGraphics.owner as patch_Player).bashing)
+        if (ply.Slowdown == 0f)
         {
-            alpha = (pGraphics.owner as patch_Player).energy * Mathf.Abs((float)Math.Sin((double)((float)rCam.room.world.rainCycle.timer % 250f / 20.0375f + order)) / 2f);
+            alpha = ply.Energy * Mathf.Abs(Mathf.Sin(rCam.room.game.clock / 20.0375f + order) / 2f);
+            alpha = alpha * 0.5f + 0.5f;
         }
-        else if ((pGraphics.owner as patch_Player).bashing)
+        else if (ply.Slowdown > 0f)
         {
             alpha = 1f;
         }
         else
         {
-            alpha = (pGraphics.owner as patch_Player).energy * Mathf.Abs((float)Math.Sin((double)((float)rCam.room.world.rainCycle.timer % 250f / 40.075f)) / 1.2f);
+            alpha = ply.Energy * Mathf.Abs(Mathf.Sin(rCam.room.game.clock / 40.075f)) / 1.2f;
         }
-        if ((pGraphics.owner as patch_Player).maxEnergy < 0.1)
-        {
-            alpha = 0f;
-            sLeaser.sprites[startSprite].isVisible= false;
-            sLeaser.sprites[startSprite + 1].isVisible = false;
-        }
+
         //pGraphics.owner.room.world.rainCycle.timer;
         sLeaser.sprites[startSprite].alpha = alpha;
         sLeaser.sprites[startSprite + 1].alpha = alpha;
@@ -86,6 +84,76 @@ public class TailRing : PlayerCosmetics
 
     public int tailSegment;
 
+}
+
+// Two light sprites, one black one white
+public class FocusSprites : PlayerCosmetics
+{
+    public FocusSprites(PlayerGraphics pGraphics, int startSprite) : base(pGraphics, startSprite)
+    {
+        spritesOverlap = SpritesOverlap.Behind;
+        numberOfSprites = 2;
+    }
+    
+    public override void Update()
+    {
+        lastFocus = focus;
+        patch_Player ply = (patch_Player)pGraphics.owner;
+        focus = Custom.LerpAndTick(focus, (ply.Focus + ply.Slowdown > 0f) ? 1f : 0f, 0.15f, 0.05f);
+    }
+
+    //public override string DefaultContainer => "Bloom";
+
+    public override void InitiateSprites(RoomCamera.SpriteLeaser sLeaser, RoomCamera rCam)
+    {
+        sLeaser.sprites[startSprite] = new FSprite("Futile_White")
+        {
+            shader = rCam.game.rainWorld.Shaders["FlatLight"]
+        };
+        sLeaser.sprites[startSprite + 1] = new FSprite("Futile_White")
+        {
+            shader = rCam.game.rainWorld.Shaders["FlatLight"]
+        };
+    }
+
+    public override void DrawSprites(RoomCamera.SpriteLeaser sLeaser, RoomCamera rCam, float timeStacker, Vector2 camPos)
+    {
+        base.DrawSprites(sLeaser, rCam, timeStacker, camPos);
+
+        Vector2 drawPos = Vector2.Lerp(
+            Vector2.Lerp(pGraphics.drawPositions[0, 1], pGraphics.drawPositions[0, 0], timeStacker),
+            Vector2.Lerp(pGraphics.drawPositions[1, 1], pGraphics.drawPositions[1, 0], timeStacker),
+            0.5f);
+
+        float alpha = Mathf.Lerp(lastFocus, focus, timeStacker);
+        if (alpha == 0f)
+        {
+            sLeaser.sprites[startSprite + 0].isVisible = false;
+            sLeaser.sprites[startSprite + 1].isVisible = false;
+        }
+        else
+        {
+            sLeaser.sprites[startSprite + 0].SetPosition(drawPos - camPos);
+            sLeaser.sprites[startSprite + 1].SetPosition(drawPos - camPos);
+            sLeaser.sprites[startSprite + 0].isVisible = true;
+            sLeaser.sprites[startSprite + 1].isVisible = true;
+            sLeaser.sprites[startSprite + 0].alpha = alpha * 0.3f;
+            sLeaser.sprites[startSprite + 0].scale = 180f * alpha / 16f;
+            sLeaser.sprites[startSprite + 1].alpha = alpha * 0.1f;
+            sLeaser.sprites[startSprite + 1].scale = 80f * alpha / 16f;
+        }
+    }
+
+    public override void ApplyPalette(RoomCamera.SpriteLeaser sLeaser, RoomCamera rCam, RoomPalette palette)
+    {
+        sLeaser.sprites[startSprite + 0].color = Color.black;
+        sLeaser.sprites[startSprite + 1].color = Color.white;
+        base.ApplyPalette(sLeaser, rCam, palette);
+    }
+
+    private bool greyscale;
+    private float focus;
+    private float lastFocus;
 }
 
 
@@ -115,14 +183,16 @@ public abstract class PlayerCosmetics
 
     public virtual void ApplyPalette(RoomCamera.SpriteLeaser sLeaser, RoomCamera rCam, RoomPalette palette)
     {
-            this.palette = palette;
+        this.palette = palette;
     }
+
+    public virtual string DefaultContainer => "Midground";
 
     public void AddToContainer(RoomCamera.SpriteLeaser sLeaser, RoomCamera rCam, FContainer newContainer)
     {
         if(newContainer == null)
         {
-            newContainer = rCam.ReturnFContainer("Midground");
+            newContainer = rCam.ReturnFContainer(DefaultContainer);
         }
         for (int i = startSprite; i < startSprite + numberOfSprites; i++)
         {

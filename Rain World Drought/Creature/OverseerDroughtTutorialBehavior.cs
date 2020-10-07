@@ -101,13 +101,16 @@ public class OverseerDroughtTutorialBehavior : AIModule
         */
         string name = this.room.abstractRoom.name;
 
+        const string tutText1 = "Tap MAP to start focusing.";
+        const string tutText2 = "Jump, then hold a DIRECTION and press JUMP to finish the boost.";
+
         switch (name)
         {
             case "FS_A01":
                     if (!displayBashInstructions)
                     {
-                        this.TutorialText("While in the air, hold GRAB and then press JUMP to start boosting.", 200, 500, true);
-                        this.TutorialText("Then hold a DIRECTION and press JUMP to finish the boost.", 0, 270, true);
+                        this.TutorialText(tutText1, 200, 500, true);
+                        this.TutorialText(tutText2, 0, 270, true);
                         this.overseer.TryAddHologram(OverseerHologram.Message.SuperJump, this.player, float.MaxValue);
                         displayBashInstructions = true;
                     }
@@ -121,8 +124,8 @@ public class OverseerDroughtTutorialBehavior : AIModule
                     }
                     if (this.superJumpTrouble > 2000)
                     {
-                        this.TutorialText("While in the air, hold GRAB and then press JUMP to start boosting.", 800, 500, true);
-                        this.TutorialText("Then hold a DIRECTION and press JUMP to finish the boost.", 0, 270, true);
+                        this.TutorialText(tutText1, 800, 500, true);
+                        this.TutorialText(tutText2, 0, 270, true);
                         this.overseer.TryAddHologram(OverseerHologram.Message.SuperJump, this.player, float.MaxValue);
                         this.superJumpTrouble = 0;
                         this.encounterCounter++;
@@ -132,7 +135,7 @@ public class OverseerDroughtTutorialBehavior : AIModule
                         this.playerHasMadeSuperJump = true;
                         Debug.Log("Yay! Superjump done!");
                     }
-                    (this.player as patch_Player).uses = 30;
+                    (this.player as patch_Player).Energy = 1f;
                 break;
         }
     }

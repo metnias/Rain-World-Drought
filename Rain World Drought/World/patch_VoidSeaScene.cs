@@ -19,7 +19,7 @@ class patch_VoidSeaScene : VoidSeaScene
             return;
         }
         (player as patch_Player).voidEnergy = true;
-        (player as patch_Player).maxEnergy = Custom.LerpMap(player.mainBodyChunk.pos.y, -1000f, -5000f, 1f, 0f);
+        (player as patch_Player).voidEnergyAmount = Custom.LerpMap(player.mainBodyChunk.pos.y, -1000f, -5000f, 0f, 1f);
         if (!(player as patch_Player).past22000 && player.mainBodyChunk.pos.y < -22000)
         {
             (player as patch_Player).past22000 = true;
