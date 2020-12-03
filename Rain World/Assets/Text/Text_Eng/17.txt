@@ -1,4 +1,4 @@
-﻿0-17
+0-17
 It's about the local aquifer - it must be quite old, from when Five Pebbles was in the planning phase. 
 
 Water is the most important resource for our basic function. Most of our processing is outsourced to<LINE>microbe strata which need a flow of clean water or else slag builds up, our processes seize, and<LINE>eventually we die. It is... very painful. They used to say that an iterator drinks a river, but neither<LINE>of us two have seen a natural river so I suppose the analogy is lost on us, <PlayerName>!

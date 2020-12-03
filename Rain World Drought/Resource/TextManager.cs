@@ -3,9 +3,9 @@ using RWCustom;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Globalization;
 using UnityEngine;
 
 namespace Rain_World_Drought.Resource
@@ -21,13 +21,41 @@ namespace Rain_World_Drought.Resource
 
         #region LanguageHandler
 
-        public static LanguageID curLang, lastLang;
+        public static LanguageID curLang = LanguageID.NULL, lastLang = LanguageID.NULL;
 
-        public static Dictionary<int, TextManager.LanguageID> OptionToID;
+        private static Dictionary<string, LanguageID> CultureToID;
+        public static Dictionary<int, LanguageID> OptionToID;
+
+        public static void IDDictInit()
+        {
+            CultureToID = new Dictionary<string, LanguageID>()
+            {
+                { "en-US", TextManager.LanguageID.English },
+                { "fr-FR", TextManager.LanguageID.French },
+                { "it-IT", TextManager.LanguageID.Italian },
+                { "de-DE", TextManager.LanguageID.German },
+                { "es-ES", TextManager.LanguageID.Spanish },
+                { "pt-PT", TextManager.LanguageID.Portuguese },
+                { "ja-JP", TextManager.LanguageID.Japanese },
+                { "ko-KR", TextManager.LanguageID.Korean },
+                { "ru-RU", TextManager.LanguageID.Russian }
+            };
+            OptionToID = new Dictionary<int, TextManager.LanguageID>()
+            {
+                { 0 , TextManager.LanguageID.English },
+                { 1 , TextManager.LanguageID.French },
+                { 2 , TextManager.LanguageID.Italian },
+                { 3 , TextManager.LanguageID.German },
+                { 4 , TextManager.LanguageID.Spanish },
+                { 5 , TextManager.LanguageID.Portuguese },
+                { 6 , TextManager.LanguageID.Japanese },
+                { 7 , TextManager.LanguageID.Korean }
+            };
+        }
 
         public enum LanguageID
         {
-            English, French, Italian, German, Spanish, Portuguese, Japanese, Korean, Russian
+            English, French, Italian, German, Spanish, Portuguese, Japanese, Korean, Russian, NULL = -1
         }
 
         /// <summary>
@@ -39,7 +67,20 @@ namespace Rain_World_Drought.Resource
         {
             orig.Invoke(self);
             // Use ConfigMachine curLang if possible
-            if (OptionToID.TryGetValue((int)self.CurrLang, out LanguageID newID)) { curLang = newID; }
+            if (DroughtMod.hasConfigMachine) { GetLangFromConfigMachine(); }
+            else
+            {
+                if (OptionToID.TryGetValue((int)self.CurrLang, out LanguageID newID)) { curLang = newID; }
+                else { curLang = LanguageID.English; }
+            }
+            //Debug.Log($"Drought uses Language {curLang}");
+        }
+
+        public static void GetLangFromConfigMachine()
+        {
+            CultureInfo ci = DroughtConfigGenerator.GetCultureInfo();
+            if (CultureToID.TryGetValue(ci.Name, out LanguageID newID)) { curLang = newID; }
+            else { curLang = LanguageID.English; }
         }
 
         #endregion LanguageHandler
@@ -123,7 +164,13 @@ namespace Rain_World_Drought.Resource
 
         private static Dictionary<string, string> ShortStringTable;
 
-        private const int sstDisplace = 12467; // Salt for ShortString xorEncrypt
+        private const int sstDisplace = 12467; // Salt for ShortString Encrypt
+
+        private static string[] SplitByLines(string orig)
+        {
+            if (orig.Contains(Environment.NewLine)) { return Regex.Split(orig, Environment.NewLine); }
+            else { return orig.Split(new char[] { '\n' }); }
+        }
 
         private static void LoadTable()
         {
@@ -131,7 +178,6 @@ namespace Rain_World_Drought.Resource
             if (curLang == LanguageID.English) { return; }
             string path = string.Concat(
                 ResourceManager.assetDir,
-                Path.DirectorySeparatorChar,
                 "Text",
                 Path.DirectorySeparatorChar,
                 "Short_Strings",
@@ -139,17 +185,14 @@ namespace Rain_World_Drought.Resource
                 LangShort(curLang),
                 ".txt"
                 );
+            Debug.Log($"Drought) TextManager LoadTable for {curLang}: {path}");
             if (!File.Exists(path)) { return; }
             string text = File.ReadAllText(path, Encoding.UTF8);
             if (text[0] == '0')
-            {
-                EncryptAllDialogue();
-            }
+            { EncryptAllDialogue(); text = text.Remove(0, 1); }
             else
-            {
-                text = Custom.xorEncrypt(text, sstDisplace);
-            }
-            string[] array = Regex.Split(text.Remove(0, 1), Environment.NewLine);
+            { text = Crypto.DecryptStringAES(text.Remove(0, 1), sstDisplace); }
+            string[] array = SplitByLines(text);
             for (int i = 1; i < array.Length; i++)
             {
                 if (array[i].StartsWith("//")) { continue; }
@@ -159,6 +202,7 @@ namespace Rain_World_Drought.Resource
                 if (pair.Length < 2) { continue; }
                 if (ShortStringTable.ContainsKey(pair[0])) { continue; } // duplicate key
                 ShortStringTable.Add(pair[0], pair[1]);
+                // Debug.Log($"{ShortStringTable.Count}: {pair[0]}|{pair[1]}");
             }
         }
 
@@ -190,8 +234,8 @@ namespace Rain_World_Drought.Resource
                     string text = File.ReadAllText(path, Encoding.UTF8);
                     if (text[0] == '0')
                     {
-                        string text2 = Custom.xorEncrypt(text, sstDisplace);
-                        text2 = '1' + text2.Remove(0, 1);
+                        string text2 = Crypto.EncryptStringAES(text.Remove(0, 1), sstDisplace);
+                        text2 = '1' + text2;
                         Debug.Log("encrypting short string: " + files[i].Name);
                         File.WriteAllText(path, text2, Encoding.UTF8);
                     }
@@ -199,7 +243,7 @@ namespace Rain_World_Drought.Resource
             }
             // Event
             int maxEvent = Mathf.Max((int[])Enum.GetValues(typeof(EventID)));
-            for (int j = 0; j < Enum.GetNames(typeof(LanguageID)).Length; j++)
+            for (int j = 0; j < Enum.GetNames(typeof(LanguageID)).Length - 1; j++)
             {
                 for (int k = 1; k <= maxEvent; k++)
                 {
@@ -219,13 +263,14 @@ namespace Rain_World_Drought.Resource
                         string text = File.ReadAllText(path, Encoding.UTF8);
                         if (text[0] == '0' && Regex.Split(text, "\r\n").Length > 1)
                         {
-                            string text3 = Custom.xorEncrypt(text, 54 + k + j * 7);
-                            text3 = '1' + text3.Remove(0, 1);
+                            string text3 = Crypto.EncryptStringAES(text.Remove(0, 1), 54 + k + j * 7);
+                            text3 = '1' + text3;
                             File.WriteAllText(path, text3, Encoding.UTF8);
                         }
                     }
                 }
             }
+            Debug.Log("encrypted event from 1 to " + maxEvent);
         }
 
         /// <summary>
@@ -259,8 +304,8 @@ namespace Rain_World_Drought.Resource
                     string text = File.ReadAllText(path, Encoding.UTF8);
                     if (text[0] == '1')
                     {
-                        string text2 = Custom.xorEncrypt(text, sstDisplace);
-                        text2 = '0' + text2.Remove(0, 1);
+                        string text2 = Crypto.DecryptStringAES(text.Remove(0, 1), sstDisplace);
+                        text2 = '0' + text2;
                         Debug.Log($"Drought) decrypting short string {files[i].Name}");
                         File.WriteAllText(path, text2, Encoding.UTF8);
                     }
@@ -268,7 +313,7 @@ namespace Rain_World_Drought.Resource
             }
             // Event
             int maxEvent = Mathf.Max((int[])Enum.GetValues(typeof(EventID)));
-            for (int j = 0; j < Enum.GetNames(typeof(LanguageID)).Length; j++)
+            for (int j = 0; j < Enum.GetNames(typeof(LanguageID)).Length - 1; j++)
             {
                 for (int k = 1; k <= maxEvent; k++)
                 {
@@ -288,8 +333,8 @@ namespace Rain_World_Drought.Resource
                         string text = File.ReadAllText(path, Encoding.UTF8);
                         if (text[0] == '1')
                         {
-                            string text3 = Custom.xorEncrypt(text, 54 + k + j * 7);
-                            text3 = '0' + text3.Remove(0, 1);
+                            string text3 = Crypto.DecryptStringAES(text.Remove(0, 1), 54 + k + j * 7);
+                            text3 = '0' + text3;
                             Debug.Log($"Drought) decrypting {(LanguageID)j} string {k}");
                             File.WriteAllText(path, text3, Encoding.UTF8);
                         }
@@ -335,15 +380,10 @@ namespace Rain_World_Drought.Resource
             }
             string text2 = File.ReadAllText(path, Encoding.UTF8);
             if (text2[0] == '0')
-            {
-                EncryptAllDialogue();
-            }
+            { EncryptAllDialogue(); text2 = text2.Remove(0, 1); }
             else
-            {
-                text2 = Custom.xorEncrypt(text2, (54 + (int)id + (int)thisLang * 7));
-            }
-            text2 = text2.Remove(0, 1);
-            string[] array = Regex.Split(text2, Environment.NewLine);
+            { text2 = Crypto.DecryptStringAES(text2.Remove(0, 1), (54 + (int)id + (int)thisLang * 7)); }
+            string[] array = SplitByLines(text2);
             try
             {
                 if (Regex.Split(array[0], "-")[1] == ((int)id).ToString())

@@ -11,6 +11,8 @@ namespace Rain_World_Drought
 {
     public partial class DroughtMod
     {
+        public static bool hasConfigMachine = false;
+
         public OptionInterface LoadOI() => DroughtConfigGenerator.LoadOI(this);
     }
 
@@ -27,8 +29,11 @@ namespace Rain_World_Drought
             try
             {
                 if (oiType == null) oiType = CreateOIType();
+                DroughtMod.hasConfigMachine = true;
+                Resource.TextManager.GetLangFromConfigMachine();
                 return (OptionInterface)Activator.CreateInstance(oiType, mod);
-            } catch(Exception e)
+            }
+            catch (Exception e)
             {
                 Debug.LogException(new Exception("Failed to generate option interface!", e));
                 throw e;
@@ -73,6 +78,7 @@ namespace Rain_World_Drought
         }
 
         private enum BaseCallOrder { Before, After, Never }
+
         private static void GenerateOverrideProxy(TypeBuilder type, MethodInfo dst, BaseCallOrder baseCallOrder = BaseCallOrder.Before)
         {
             // Get parameter types
@@ -80,7 +86,7 @@ namespace Rain_World_Drought
             if (dstParams.Length < 1) throw new ArgumentException("The destination method has no arguments.");
             Type parentClass = type.BaseType;
             if (!dstParams[0].ParameterType.IsAssignableFrom(parentClass)) throw new ArgumentException("The destination method's first parameter must be the base class.");
-            
+
             Type[] srcTypes = new Type[dstParams.Length - 1];
             for (int i = 0; i < srcTypes.Length; i++)
                 srcTypes[i] = dstParams[i + 1].ParameterType;
@@ -101,7 +107,7 @@ namespace Rain_World_Drought
                 default: callOrder = new MethodInfo[] { dst }; break;
             }
 
-            for(int i = 0; i < callOrder.Length; i++)
+            for (int i = 0; i < callOrder.Length; i++)
             {
                 MethodInfo m = callOrder[i];
                 for (short arg = 0; arg < dstParams.Length; arg++)
@@ -113,6 +119,6 @@ namespace Rain_World_Drought
             type.DefineMethodOverride(mb, parentMethod);
         }
 
-        //public static CultureInfo GetCultureInfo(OptionInterface self) => return self.GetCultureInfo();
+        public static CultureInfo GetCultureInfo() => OptionInterface.GetCultureInfo();
     }
 }

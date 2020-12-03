@@ -2,8 +2,8 @@
 // Add | at the end of each line and add translation. anything after '//' will be ignored.
 
 /// Character Screen ///
-THE WANDERER
-Curious and calm, with a deep desire to discover the ancient mysteries around it.<LINE>In tune with the events of the world, your journey will have a significant impact on things much greater than yourself.
+THE WANDERER|방랑자
+Curious and calm, with a deep desire to discover the ancient mysteries around it.<LINE>In tune with the events of the world, your journey will have a significant impact on things much greater than yourself.|호기심이 많고 침착하며, 고대의 수수께끼를 밝혀내고자 하는 욕망을 깊이 품고 있다.<LINE>세계의 사건들에 엮이며, 그 여정은 훨씬 위대한 존재들에게 중대한 영향을 끼치리라.
 
 /// Region Name ///
 Intake System

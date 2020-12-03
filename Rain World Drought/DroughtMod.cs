@@ -103,19 +103,7 @@ namespace Rain_World_Drought
 
             #region GetLanguage
 
-            // if ConfigMachine is detected, use that
-
-            TextManager.OptionToID = new Dictionary<int, TextManager.LanguageID>()
-            {
-                { 0 , TextManager.LanguageID.English },
-                { 1 , TextManager.LanguageID.French },
-                { 2 , TextManager.LanguageID.Italian },
-                { 3 , TextManager.LanguageID.German },
-                { 4 , TextManager.LanguageID.Spanish },
-                { 5 , TextManager.LanguageID.Portuguese },
-                { 6 , TextManager.LanguageID.Japanese },
-                { 7 , TextManager.LanguageID.Korean }
-            };
+            TextManager.IDDictInit();
             if (TextManager.OptionToID.TryGetValue(self.options.language, out TextManager.LanguageID code)) { TextManager.curLang = code; }
             else { TextManager.curLang = TextManager.LanguageID.English; }
 

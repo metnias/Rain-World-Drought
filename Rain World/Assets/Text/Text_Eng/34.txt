@@ -1,4 +1,4 @@
-﻿0-34
+0-34
 This is a slime mold plasmodium. Thank you, but I can't eat this.<LINE>Have a good meal anyway!
 
 ...

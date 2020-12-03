@@ -1,4 +1,4 @@
-﻿0-52
+0-52
 It is the remains of an overseer.
 20 : 20 : Overseers act as our eyes on the outside.
 Usually they're quite smart and evasive, I'm surprised you managed to break one!

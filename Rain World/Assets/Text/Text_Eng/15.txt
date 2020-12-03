@@ -1,4 +1,4 @@
-﻿0-15
+0-15
 It's the blueprint for a Void Fluid filtration system.<LINE>Do you know what Void Fluid is? I think you don't.
 
 If you leave a stone on the ground, and come back some time later, it's covered in dust. This happens<LINE>everywhere, and over several lifetimes of creatures such as you, the ground slowly builds upwards. 

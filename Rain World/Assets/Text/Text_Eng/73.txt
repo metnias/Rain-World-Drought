@@ -1,4 +1,4 @@
-﻿0-73
+0-73
 It's an active working memory - raw data has been dropped here in order to later be<LINE>pasted to a currently occupied memory conflux. Without context it's just a jumble. 
 It is the impression of being a small creature, like a wall climbing lizard, looking <LINE>up into the branches of a big tree. The last third is partly overwritten with a number <LINE>series I vaguely recognize, I think Moon sent it to me at some point.
 Seven... intertwined number series? I don't quite understand the utility of this. <LINE>Might a key for a cipher processor, customized for some other data which is impossible to infer from this.
