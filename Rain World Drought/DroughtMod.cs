@@ -13,7 +13,7 @@ using UnityEngine;
 
 namespace Rain_World_Drought
 {
-    public class DroughtMod : PartialityMod
+    public partial class DroughtMod : PartialityMod
     {
         public DroughtMod()
         {
@@ -27,6 +27,9 @@ namespace Rain_World_Drought
             ResourceReady = false;
             ResourceManager.assetDir = string.Concat(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),
                 Path.DirectorySeparatorChar, "DroughtAssets", Path.DirectorySeparatorChar);
+
+            // Debugging!
+            Debugging.Patch();
 
             #region Creatures
             // namespaces must be 'Rain_World_Drought.Creatures', not 'Creature' without s, which confuses the compiler with global::Creature
@@ -51,6 +54,7 @@ namespace Rain_World_Drought
             // Patch PlacedObjs
             AbstractPhysicalObjectHK.Patch(); // + RedLight
             DataPearlHK.Patch();
+            PistonPhysics.Patch();
 
             #region Resource
             // namespaces must be 'Rain_World_Drought.Resource', not 'Resources' with s, which confuses the compiler with UnityEngine.Resources

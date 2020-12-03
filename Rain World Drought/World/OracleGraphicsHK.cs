@@ -77,7 +77,6 @@ namespace Rain_World_Drought.OverWorld
         private static void InitiateSpritesHK(On.OracleGraphics.orig_InitiateSprites orig, OracleGraphics self,
             RoomCamera.SpriteLeaser sLeaser, RoomCamera rCam)
         {
-            wait = self.oracle.ID == Oracle.OracleID.SL;
             orig.Invoke(self, sLeaser, rCam);
             if (self.oracle.ID == Oracle.OracleID.SL)
             {
@@ -86,18 +85,16 @@ namespace Rain_World_Drought.OverWorld
                 sLeaser.sprites[self.killSprite].scaleX = 1f;
                 sLeaser.sprites[self.killSprite].scaleY = 1f;
                 sLeaser.sprites[self.killSprite].alpha = 1f;
-                wait = false;
-                self.AddToContainer(sLeaser, rCam, null);
             }
+            self.AddToContainer(sLeaser, rCam, null);
         }
 
-        public static bool wait = false;
-
-        private static void AddToContainerHK(On.OracleGraphics.orig_AddToContainer orig, OracleGraphics self,
-            RoomCamera.SpriteLeaser sLeaser, RoomCamera rCam, FContainer newContatiner)
+        private static void AddToContainerHK(On.OracleGraphics.orig_AddToContainer orig, OracleGraphics self, RoomCamera.SpriteLeaser sLeaser, RoomCamera rCam, FContainer newContainer)
         {
-            if (wait) { return; }
-            orig.Invoke(self, sLeaser, rCam, newContatiner);
+            // Skip adding to container if not all sprites have been initialized
+            for(int i = 0; i < sLeaser.sprites.Length; i++)
+                if (sLeaser.sprites[i] == null) return;
+            orig(self, sLeaser, rCam, newContainer);
         }
 
         private static void UpdateHK(On.OracleGraphics.orig_Update orig, OracleGraphics self)
@@ -233,6 +230,7 @@ namespace Rain_World_Drought.OverWorld
                 if (self.lightsource == null)
                 {
                     self.lightsource = new LightSource(self.oracle.firstChunk.pos, false, Custom.HSL2RGB(0.1f, 1f, 0.5f), self.oracle);
+                    self.lightsource.requireUpKeep = true;
                     self.lightsource.affectedByPaletteDarkness = 0f;
                     self.oracle.room.AddObject(self.lightsource);
                 }
@@ -248,6 +246,7 @@ namespace Rain_World_Drought.OverWorld
                 if (self.lightsource == null)
                 {
                     self.lightsource = new LightSource(self.oracle.firstChunk.pos, false, Custom.HSL2RGB(0.1012423f, 0.257576f, 0.91322334f), self.oracle);
+                    self.lightsource.requireUpKeep = true;
                     self.lightsource.affectedByPaletteDarkness = 0f;
                     self.oracle.room.AddObject(self.lightsource);
                 }
@@ -258,6 +257,7 @@ namespace Rain_World_Drought.OverWorld
                     self.lightsource.setPos = new Vector2?(self.oracle.firstChunk.pos);
                 }
             }
+            if (self.lightsource != null) self.lightsource.stayAlive = true;
         }
 
         private static void DrawSpritesHK(On.OracleGraphics.orig_DrawSprites orig, OracleGraphics self,
